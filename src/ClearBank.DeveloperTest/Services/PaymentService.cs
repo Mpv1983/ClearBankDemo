@@ -1,91 +1,79 @@
 ﻿using ClearBank.DeveloperTest.Data;
 using ClearBank.DeveloperTest.Types;
-using System.Configuration;
 
 namespace ClearBank.DeveloperTest.Services
 {
+    /*
+        General comments
+        I've omitted dependancy injection of the dataStore and logging
+
+        With the orginal code all paths would have returned false, I've modified the behaviour so that happy paths can be
+        returned
+     */
     public class PaymentService : IPaymentService
     {
+        private readonly IDataStore _dataStore;
+
+        public PaymentService(IDataStore dataStore)
+        {
+            _dataStore = dataStore;
+        }
+
         public MakePaymentResult MakePayment(MakePaymentRequest request)
         {
-            var dataStoreType = ConfigurationManager.AppSettings["DataStoreType"];
 
-            Account account = null;
+            Account account = _dataStore.GetAccount(request.DebtorAccountNumber);
 
-            if (dataStoreType == "Backup")
+            var result = GetValidationResult(request, account);
+            
+            if (result.Success)
             {
-                var accountDataStore = new BackupAccountDataStore();
-                account = accountDataStore.GetAccount(request.DebtorAccountNumber);
-            }
-            else
-            {
-                var accountDataStore = new AccountDataStore();
-                account = accountDataStore.GetAccount(request.DebtorAccountNumber);
+                account.Balance -= request.Amount;
+                _dataStore.UpdateAccount(account);
             }
 
-            var result = new MakePaymentResult();
+            return result;
+        }
+
+        private static MakePaymentResult GetValidationResult(MakePaymentRequest request, Account account)
+        {
+            var result = new MakePaymentResult { Success = true };
+
+            if (account == null)
+            {
+                result.Success = false;
+                return result;
+            }
+
+            if (!account.AllowedPaymentSchemes.HasFlag(PaymentSchemeToFlag(request.PaymentScheme)))
+            {
+                result.Success = false;
+                return result;
+            }
 
             switch (request.PaymentScheme)
             {
-                case PaymentScheme.Bacs:
-                    if (account == null)
-                    {
-                        result.Success = false;
-                    }
-                    else if (!account.AllowedPaymentSchemes.HasFlag(AllowedPaymentSchemes.Bacs))
-                    {
-                        result.Success = false;
-                    }
-                    break;
-
                 case PaymentScheme.FasterPayments:
-                    if (account == null)
-                    {
-                        result.Success = false;
-                    }
-                    else if (!account.AllowedPaymentSchemes.HasFlag(AllowedPaymentSchemes.FasterPayments))
-                    {
-                        result.Success = false;
-                    }
-                    else if (account.Balance < request.Amount)
+                    if (account.Balance < request.Amount)
                     {
                         result.Success = false;
                     }
                     break;
 
                 case PaymentScheme.Chaps:
-                    if (account == null)
-                    {
-                        result.Success = false;
-                    }
-                    else if (!account.AllowedPaymentSchemes.HasFlag(AllowedPaymentSchemes.Chaps))
-                    {
-                        result.Success = false;
-                    }
-                    else if (account.Status != AccountStatus.Live)
+                    if (account.Status != AccountStatus.Live)
                     {
                         result.Success = false;
                     }
                     break;
             }
 
-            if (result.Success)
-            {
-                account.Balance -= request.Amount;
-
-                if (dataStoreType == "Backup")
-                {
-                    var accountDataStore = new BackupAccountDataStore();
-                    accountDataStore.UpdateAccount(account);
-                }
-                else
-                {
-                    var accountDataStore = new AccountDataStore();
-                    accountDataStore.UpdateAccount(account);
-                }
-            }
-
             return result;
+        }
+
+        private static AllowedPaymentSchemes PaymentSchemeToFlag(PaymentScheme paymentScheme)
+        {
+            return (AllowedPaymentSchemes)(1 << (int)paymentScheme);
         }
     }
 }
